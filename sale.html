@@ -1227,6 +1227,47 @@
 </div>
 
 <!-- Toast Container -->
+<!-- ══ نافذة تنبيه الصلاحية اليومية ══ -->
+<div class="modal-overlay" id="expiryAlertModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <span class="modal-title">
+        <i class="fa-solid fa-triangle-exclamation" style="color:var(--warning);"></i>
+        تنبيه الصلاحية
+      </span>
+      <button class="modal-close" onclick="closeExpiryAlert()">✕</button>
+    </div>
+
+    <!-- ملخص سريع -->
+    <div id="expiryAlertSummary" style="
+      display:flex; gap:10px; margin-bottom:18px; flex-wrap:wrap;
+    "></div>
+
+    <!-- قائمة الدفعات الحرجة -->
+    <div style="max-height:280px; overflow-y:auto; margin-bottom:6px;">
+      <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+        <thead>
+          <tr style="border-bottom:2px solid var(--primary);">
+            <th style="padding:7px 10px; text-align:right; color:var(--text-secondary); font-weight:800;">المنتج</th>
+            <th style="padding:7px 10px; text-align:center; color:var(--text-secondary); font-weight:800;">الصلاحية</th>
+            <th style="padding:7px 10px; text-align:center; color:var(--text-secondary); font-weight:800;">الحالة</th>
+          </tr>
+        </thead>
+        <tbody id="expiryAlertTbody"></tbody>
+      </table>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="goToExpiryTab()">
+        <i class="fa-solid fa-arrow-left"></i> إدارة المخزون
+      </button>
+      <button class="btn btn-secondary" onclick="closeExpiryAlert()">
+        تجاهل اليوم
+      </button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-container"></div>
 
 <script src="app.js"></script>
@@ -1283,7 +1324,10 @@ async function init() {
   
   // تحميل المبيعات المعلقة
   loadHeldSales();
-  
+
+  // فحص تنبيه الصلاحية — مرة واحدة يومياً
+  await checkExpiryAlert();
+
   console.log('✅ واجهة البيع جاهزة');
 }
 
@@ -2591,6 +2635,147 @@ function doLogout() {
       window.sessionManager.logout();
     }
   });
+}
+
+// ══════════════════════════════════════════════════════════════
+//  تنبيه الصلاحية اليومي
+// ══════════════════════════════════════════════════════════════
+
+async function checkExpiryAlert() {
+  try {
+    // فحص إذا ظهرت النافذة اليوم مسبقاً
+    const todayStr   = window.dateUtils.today();
+    const lastShown  = localStorage.getItem('posdz_expiry_alert_date');
+    if (lastShown === todayStr) return; // لا تُظهر مرتين في نفس اليوم
+
+    // قراءة الدفعات والمنتجات من DB
+    const batches  = await window.dbManager.getAll('productBatches');
+    const products = await window.dbManager.getAll('products');
+    const expiryAlertDays = parseInt(await window.getSetting('expiryAlertDays')) || 30;
+
+    // جمع العناصر الحرجة: دفعات جديدة
+    const criticalRows = [];
+
+    batches
+      .filter(b => b.expiryDate && (b.quantity || 0) > 0)
+      .forEach(b => {
+        const daysSince = window.dateUtils.daysBetween(b.expiryDate);
+        // نعرض فقط: منتهي أو حرج (أقل من 7 أيام) أو ضمن نافذة التنبيه
+        if (daysSince >= -expiryAlertDays) {
+          const prod = products.find(p => p.id === b.productId);
+          criticalRows.push({
+            name:       prod ? prod.name : (b.productName || '—'),
+            expiryDate: b.expiryDate,
+            quantity:   b.quantity,
+            daysSince
+          });
+        }
+      });
+
+    // fallback: منتجات قديمة بدون دفعة
+    products
+      .filter(p => p.expiryDate && !batches.some(b => b.productId === p.id))
+      .forEach(p => {
+        const daysSince = window.dateUtils.daysBetween(p.expiryDate);
+        if (daysSince >= -expiryAlertDays) {
+          criticalRows.push({
+            name:       p.name,
+            expiryDate: p.expiryDate,
+            quantity:   p.quantity,
+            daysSince
+          });
+        }
+      });
+
+    // لا شيء حرج → لا نُظهر النافذة
+    if (criticalRows.length === 0) return;
+
+    // ترتيب: الأخطر أولاً
+    criticalRows.sort((a, b) => b.daysSince - a.daysSince);
+
+    // حساب الأعداد لكل مستوى
+    const cntExpired  = criticalRows.filter(r => r.daysSince >= 0).length;
+    const cntCritical = criticalRows.filter(r => r.daysSince < 0 && r.daysSince >= -7).length;
+    const cntWarning  = criticalRows.filter(r => r.daysSince < -7).length;
+
+    // بناء الملخص
+    const summary = document.getElementById('expiryAlertSummary');
+    if (summary) {
+      const chip = (icon, label, val, color) => val > 0 ? `
+        <div style="display:flex;align-items:center;gap:6px;
+          background:${color}22; border:1px solid ${color}55;
+          border-radius:20px; padding:5px 12px; font-size:0.82rem; font-weight:800;">
+          ${icon} <span style="color:${color};">${val} ${label}</span>
+        </div>` : '';
+      summary.innerHTML =
+        chip('❌', 'منتهية',  cntExpired,  '#ef4444') +
+        chip('⚠️', 'حرجة',    cntCritical, '#ea580c') +
+        chip('🕐', 'تنبيه',   cntWarning,  '#f59e0b');
+    }
+
+    // بناء صفوف الجدول
+    const tbody = document.getElementById('expiryAlertTbody');
+    if (tbody) {
+      tbody.innerHTML = criticalRows.slice(0, 15).map(r => {
+        let badgeCls, badgeLabel;
+        if (r.daysSince >= 0) {
+          badgeCls = 'expiry-danger';   badgeLabel = '❌ منتهي';
+        } else if (r.daysSince >= -7) {
+          badgeCls = 'expiry-critical'; badgeLabel = `⚠️ ${-r.daysSince} يوم`;
+        } else {
+          badgeCls = 'expiry-warning';  badgeLabel = `🕐 ${-r.daysSince} يوم`;
+        }
+        return `
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 10px; font-weight:700;">
+              ${window.sanitizer ? window.sanitizer.escape(r.name) : r.name}
+            </td>
+            <td style="padding:8px 10px; text-align:center; color:var(--text-secondary); font-size:0.8rem;">
+              ${window.dateUtils.formatDate(r.expiryDate)}
+            </td>
+            <td style="padding:8px 10px; text-align:center;">
+              <span style="
+                display:inline-block; padding:3px 10px; border-radius:14px;
+                font-size:0.75rem; font-weight:800;
+                background:var(--bg-dark);
+              " class="${badgeCls}">${badgeLabel}</span>
+            </td>
+          </tr>`;
+      }).join('');
+
+      // إذا تجاوز 15 صفاً نضيف تلميحاً
+      if (criticalRows.length > 15) {
+        tbody.innerHTML += `
+          <tr>
+            <td colspan="3" style="padding:8px 10px; text-align:center;
+              color:var(--text-secondary); font-size:0.8rem;">
+              ... و ${criticalRows.length - 15} عنصر آخر — اذهب للمخزون لعرض الكل
+            </td>
+          </tr>`;
+      }
+    }
+
+    // حفظ تاريخ اليوم حتى لا تظهر مجدداً
+    localStorage.setItem('posdz_expiry_alert_date', todayStr);
+
+    // إظهار النافذة
+    const modal = document.getElementById('expiryAlertModal');
+    if (modal) modal.classList.add('open');
+
+  } catch (e) {
+    // أي خطأ → نتجاهل بصمت حتى لا يعطل واجهة البيع
+    console.warn('[ExpiryAlert] خطأ:', e);
+  }
+}
+
+function closeExpiryAlert() {
+  const modal = document.getElementById('expiryAlertModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function goToExpiryTab() {
+  closeExpiryAlert();
+  window.location.href = 'inventory.html';
 }
 
 // ══════════════════════════════════════════════════════════════
