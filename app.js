@@ -9,7 +9,7 @@ const APP_VERSION = { number: '8.1.0', date: '2026-03', name: 'POS DZ' };
 //  IndexedDB - إدارة احترافية مع معالجة الترقيات
 // ══════════════════════════════════════════════════════════════
 const DB_NAME = 'POSDZ_DB';
-const DB_VERSION = 7; // v7: إضافة transactions + include_in_reports
+const DB_VERSION = 8; // v8: إضافة productBatches لنظام تتبع دفعات الصلاحية
 
 class DatabaseManager {
   constructor() {
@@ -19,7 +19,8 @@ class DatabaseManager {
       'users', 'products', 'families', 'customers', 'suppliers',
       'sales', 'saleItems', 'debts', 'debtPayments', 'expenses',
       'purchases', 'settings', 'logs', 'counter', 'syncQueue',
-      'workers', 'workerPayments', 'dailyEntries', 'transactions'
+      'workers', 'workerPayments', 'dailyEntries', 'transactions',
+      'productBatches'
     ];
   }
 
@@ -155,6 +156,13 @@ class DatabaseManager {
     transactions.createIndex('date', 'date', { unique: false });
     transactions.createIndex('type', 'type', { unique: false }); // 'debt_payment' / 'expense' / 'salary'
     transactions.createIndex('ref_id', 'ref_id', { unique: false });
+
+    // دفعات المنتجات — نظام FEFO لتتبع الصلاحية
+    // كل دفعة استلام تُحفظ مستقلة: productId, quantity, expiryDate, receivedDate, note
+    const productBatches = db.createObjectStore('productBatches', { keyPath: 'id', autoIncrement: true });
+    productBatches.createIndex('productId',    'productId',    { unique: false });
+    productBatches.createIndex('expiryDate',   'expiryDate',   { unique: false });
+    productBatches.createIndex('receivedDate', 'receivedDate', { unique: false });
   }
 
   _handleUpgrade(db, tx, oldVersion) {
@@ -211,6 +219,16 @@ class DatabaseManager {
         if (!expStore.indexNames.contains('include_in_reports')) {
           expStore.createIndex('include_in_reports', 'include_in_reports', { unique: false });
         }
+      }
+    }
+
+    // ترقية من الإصدار 7 إلى 8 — إضافة جدول productBatches
+    if (oldVersion < 8) {
+      if (!db.objectStoreNames.contains('productBatches')) {
+        const productBatches = db.createObjectStore('productBatches', { keyPath: 'id', autoIncrement: true });
+        productBatches.createIndex('productId',    'productId',    { unique: false });
+        productBatches.createIndex('expiryDate',   'expiryDate',   { unique: false });
+        productBatches.createIndex('receivedDate', 'receivedDate', { unique: false });
       }
     }
   }
