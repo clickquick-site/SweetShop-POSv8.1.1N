@@ -882,10 +882,11 @@
               <span>سجل المصاريف</span>
             </div>
             <div style="display:flex; gap:10px;">
-              <select class="form-select" style="width:120px;" id="expenseFilter" onchange="loadExpenses()">
+              <select class="form-select" style="width:150px;" id="expenseFilter" onchange="loadExpenses()">
                 <option value="all">الكل</option>
                 <option value="paid">مسددة</option>
                 <option value="pending">غير مسددة</option>
+                <option value="expiry_loss">⚫ خسائر الصلاحية</option>
               </select>
               <input type="date" class="form-input" style="width:130px;" id="expenseDateFilter" onchange="loadExpenses()"/>
             </div>
@@ -1158,18 +1159,25 @@ async function loadAllData() {
 function updateStats() {
   const today = window.dateUtils.today();
   const thisMonth = today.slice(0, 7);
-  
+
   // مصاريف اليوم
-  const todayExpenses = allExpenses.filter(e => 
+  const todayExpenses = allExpenses.filter(e =>
     e.date && e.date.startsWith(today) && e.isPaid
   );
   const todayTotal = todayExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
-  
+
   // مصاريف هذا الشهر
-  const monthExpenses = allExpenses.filter(e => 
+  const monthExpenses = allExpenses.filter(e =>
     e.date && e.date.startsWith(thisMonth) && e.isPaid
   );
   const monthTotal = monthExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+
+  // خسائر الصلاحية هذا الشهر
+  const expiryLossMonth = allExpenses
+    .filter(e => e.source === 'expiry_loss' && e.date && e.date.startsWith(thisMonth))
+    .reduce((sum, e) => sum + (e.amount || 0), 0);
+  const elEl = document.getElementById('statExpiryLoss');
+  if (elEl) elEl.textContent = window.currencyFormatter.format(expiryLossMonth);
   
   // رواتب هذا الشهر
   const monthSalaries = allWorkerPayments.filter(p => 
@@ -1226,7 +1234,19 @@ function updateStats() {
         <div class="stat-sub">${pendingExpenses.length} فاتورة</div>
       </div>
     </div>
-  `;
+
+    <div class="stat-card" style="border-right:4px solid var(--danger); cursor:pointer;"
+         onclick="document.getElementById('expenseFilter').value='expiry_loss'; loadExpenses();">
+      <div class="stat-icon" style="background:rgba(239,68,68,0.15); color:var(--danger);">
+        <i class="fa-solid fa-calendar-xmark"></i>
+      </div>
+      <div class="stat-content">
+        <div class="stat-label">خسائر الصلاحية (الشهر)</div>
+        <div class="stat-value" id="statExpiryLoss" style="color:var(--danger);">0 DA</div>
+        <div class="stat-sub">اضغط للعرض</div>
+      </div>
+    </div>
+  \`;
 }
 
 // ============================================================
@@ -1268,11 +1288,13 @@ function renderExpenses() {
   const dateFilter = document.getElementById('expenseDateFilter').value;
   
   let filtered = allExpenses;
-  
+
   if (filter === 'paid') {
     filtered = filtered.filter(e => e.isPaid);
   } else if (filter === 'pending') {
     filtered = filtered.filter(e => !e.isPaid);
+  } else if (filter === 'expiry_loss') {
+    filtered = filtered.filter(e => e.source === 'expiry_loss');
   }
   
   if (dateFilter) {
@@ -1294,12 +1316,20 @@ function renderExpenses() {
   container.innerHTML = filtered.map(expense => {
     const category = expense.category || 'أخرى';
     const icon = getCategoryIcon(category);
-    
+    const isExpiryLoss = expense.source === 'expiry_loss';
+
     return `
-      <div class="expense-item">
+      <div class="expense-item" style="${isExpiryLoss
+        ? 'border-right:4px solid var(--danger); background:rgba(239,68,68,0.04);'
+        : ''}">
         <div class="expense-category">
           <div class="category-icon">${icon}</div>
-          <span>${window.sanitizer.escape(category)}</span>
+          <div>
+            <span>${window.sanitizer.escape(category)}</span>
+            ${isExpiryLoss
+              ? `<div style="font-size:0.68rem;color:var(--danger);font-weight:700;margin-top:1px;">⚫ شطب صلاحية</div>`
+              : ''}
+          </div>
         </div>
         
         <div class="expense-info">
@@ -1346,7 +1376,8 @@ function getCategoryIcon(category) {
     'صيانة': '🔧',
     'نقل': '🚚',
     'مستلزمات': '📦',
-    'سحب خاص': '💰'
+    'سحب خاص': '💰',
+    'خسارة صلاحية': '⚫',
   };
   return icons[category] || '📋';
 }
