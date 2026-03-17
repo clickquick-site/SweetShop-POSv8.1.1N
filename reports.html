@@ -860,6 +860,11 @@
       <div class="sidebar-icon"><i class="fa-solid fa-users"></i></div>
       <div class="sidebar-label">أداء البائعين</div>
     </div>
+
+    <div class="sidebar-item" onclick="showPanel('expiryLosses')" id="menu-expiryLosses">
+      <div class="sidebar-icon"><i class="fa-solid fa-calendar-xmark" style="color:#ef4444;"></i></div>
+      <div class="sidebar-label" style="color:#ef4444;">خسائر الصلاحية</div>
+    </div>
   </div>
 
   <!-- المحتوى الرئيسي -->
@@ -1435,6 +1440,90 @@
         </table>
       </div>
     </div>
+
+    <!-- ========== لوحة خسائر الصلاحية ========== -->
+    <div id="panel-expiryLosses" class="panel" style="display:none;">
+
+      <!-- رأس اللوحة -->
+      <div class="chart-header" style="margin-bottom:20px;">
+        <div class="chart-title">
+          <i class="fa-solid fa-calendar-xmark" style="color:#ef4444;"></i>
+          <span>تقرير خسائر الصلاحية</span>
+        </div>
+        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+          <select id="expiryLossRange" class="form-input" style="width:160px;"
+                  onchange="loadExpiryLossesReport()">
+            <option value="month">هذا الشهر</option>
+            <option value="3months">آخر 3 أشهر</option>
+            <option value="year">هذه السنة</option>
+            <option value="all">كل الوقت</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- بطاقات الملخص -->
+      <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
+                  gap:14px; margin-bottom:22px;">
+
+        <div class="kpi-card" style="border-right:4px solid #ef4444;">
+          <div class="kpi-header">
+            <span class="kpi-title">إجمالي الخسائر</span>
+            <div class="kpi-icon" style="background:rgba(239,68,68,0.15); color:#ef4444;">
+              <i class="fa-solid fa-money-bill-wave"></i>
+            </div>
+          </div>
+          <div class="kpi-value" id="elTotalLoss" style="color:#ef4444;">—</div>
+          <span class="trend-flat" id="elTotalCount">0 عملية</span>
+        </div>
+
+        <div class="kpi-card" style="border-right:4px solid #ea580c;">
+          <div class="kpi-header">
+            <span class="kpi-title">أكثر منتج خسارة</span>
+            <div class="kpi-icon" style="background:rgba(234,88,12,0.15); color:#ea580c;">
+              <i class="fa-solid fa-trophy"></i>
+            </div>
+          </div>
+          <div class="kpi-value" id="elTopProduct"
+               style="color:#ea580c; font-size:0.9rem; font-family:var(--font-main);">—</div>
+        </div>
+
+        <div class="kpi-card" style="border-right:4px solid #f59e0b;">
+          <div class="kpi-header">
+            <span class="kpi-title">متوسط الخسارة / شطب</span>
+            <div class="kpi-icon" style="background:rgba(245,158,11,0.15); color:#f59e0b;">
+              <i class="fa-solid fa-chart-simple"></i>
+            </div>
+          </div>
+          <div class="kpi-value" id="elAvgLoss" style="color:#f59e0b;">—</div>
+        </div>
+
+      </div>
+
+      <!-- جدول تفصيلي -->
+      <div class="table-container">
+        <table class="sales-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>المنتج</th>
+              <th>الخسارة</th>
+              <th>التاريخ</th>
+              <th>ملاحظة</th>
+            </tr>
+          </thead>
+          <tbody id="expiryLossesTbody">
+            <tr>
+              <td colspan="5" style="text-align:center; padding:40px;
+                  color:var(--text-secondary);">
+                <i class="fa-solid fa-spinner fa-spin" style="font-size:1.5rem;"></i>
+                <p style="margin-top:10px;">جاري التحميل...</p>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -1646,6 +1735,9 @@ function showPanel(panelId) {
       document.getElementById('sellerFrom').value = firstDay;
       document.getElementById('sellerTo').value = window.dateUtils.today();
       loadSellers();
+      break;
+    case 'expiryLosses':
+      loadExpiryLossesReport();
       break;
   }
 }
@@ -3124,6 +3216,108 @@ function doLogout() {
       window.sessionManager.logout();
     }
   });
+}
+
+// ============================================================
+//  تقرير خسائر الصلاحية
+// ============================================================
+async function loadExpiryLossesReport() {
+  try {
+    const range   = document.getElementById('expiryLossRange')?.value || 'month';
+    const tbody   = document.getElementById('expiryLossesTbody');
+    const fmt     = window.currencyFormatter.format.bind(window.currencyFormatter);
+    const today   = window.dateUtils.today();
+
+    // تحديد نافذة التاريخ
+    let fromDate = '';
+    if (range === 'month')   fromDate = today.slice(0, 7) + '-01';
+    else if (range === '3months') {
+      const d = new Date(); d.setMonth(d.getMonth() - 3);
+      fromDate = d.toISOString().split('T')[0];
+    }
+    else if (range === 'year') fromDate = today.slice(0, 4) + '-01-01';
+
+    // جلب خسائر الصلاحية من expenses
+    const allExp = await window.dbManager.getAll('expenses');
+    let losses   = allExp.filter(e => e.source === 'expiry_loss');
+
+    if (fromDate) {
+      losses = losses.filter(e => e.date && e.date >= fromDate);
+    }
+
+    // ── بطاقات الملخص ────────────────────────────────────────
+    const totalLoss  = losses.reduce((s, e) => s + (e.amount || 0), 0);
+    const avgLoss    = losses.length > 0 ? totalLoss / losses.length : 0;
+
+    // أكثر منتج خسارة
+    const byProduct  = {};
+    losses.forEach(e => {
+      const name = (e.note || '').split(' — ')[0].replace('شطب صلاحية: ', '').trim()
+                   || e.note || '—';
+      byProduct[name] = (byProduct[name] || 0) + (e.amount || 0);
+    });
+    const topProduct = Object.entries(byProduct)
+      .sort((a, b) => b[1] - a[1])[0];
+
+    const s = id => document.getElementById(id);
+    if (s('elTotalLoss'))   s('elTotalLoss').textContent   = fmt(totalLoss);
+    if (s('elTotalCount'))  s('elTotalCount').textContent  = `${losses.length} عملية`;
+    if (s('elTopProduct'))  s('elTopProduct').textContent  =
+      topProduct ? `${topProduct[0]} (${fmt(topProduct[1])})` : '—';
+    if (s('elAvgLoss'))     s('elAvgLoss').textContent     =
+      losses.length > 0 ? fmt(avgLoss) : '—';
+
+    // ── الجدول التفصيلي ──────────────────────────────────────
+    if (!tbody) return;
+
+    if (losses.length === 0) {
+      tbody.innerHTML = `
+        <tr>
+          <td colspan="5" style="text-align:center; padding:50px;
+              color:var(--text-secondary);">
+            <i class="fa-solid fa-circle-check"
+               style="font-size:2.5rem; color:var(--success); opacity:0.7;"></i>
+            <p style="margin-top:14px; font-weight:800;">
+              ✅ لا توجد خسائر صلاحية في هذه الفترة
+            </p>
+          </td>
+        </tr>`;
+      return;
+    }
+
+    // ترتيب من الأحدث للأقدم
+    losses.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+
+    tbody.innerHTML = losses.map((e, idx) => {
+      const note = e.note || '—';
+      return `
+        <tr>
+          <td style="color:var(--text-secondary); font-weight:700;">${idx + 1}</td>
+          <td style="font-weight:800;">
+            ${window.sanitizer ? window.sanitizer.escape(
+                note.replace('شطب صلاحية: ', '').split(' — ')[0]
+              ) : note}
+          </td>
+          <td>
+            <span style="display:inline-block; background:rgba(239,68,68,0.12);
+              color:var(--danger); border:1px solid rgba(239,68,68,0.3);
+              border-radius:8px; padding:2px 10px; font-size:0.82rem; font-weight:800;">
+              ${fmt(e.amount || 0)}
+            </span>
+          </td>
+          <td style="color:var(--text-secondary);">
+            ${window.dateUtils.formatDate(e.date)}
+          </td>
+          <td style="color:var(--text-secondary); font-size:0.82rem;">
+            ${window.sanitizer ? window.sanitizer.escape(note) : note}
+          </td>
+        </tr>`;
+    }).join('');
+
+  } catch (err) {
+    console.error('[loadExpiryLossesReport]', err);
+    window.toast?.show('خطأ في تحميل تقرير الخسائر', 'error');
+  }
 }
 
 // ============================================================
