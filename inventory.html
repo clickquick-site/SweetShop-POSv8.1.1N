@@ -405,6 +405,94 @@
       font-weight: 800;
     }
 
+    /* ── لوحة القرارات ─────────────────────────────── */
+    .risk-loss-badge {
+      display: inline-block;
+      background: rgba(239,68,68,0.12);
+      color: var(--danger);
+      border: 1px solid rgba(239,68,68,0.3);
+      border-radius: 8px;
+      padding: 2px 10px;
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+
+    .risk-rate-badge {
+      display: inline-block;
+      background: rgba(124,58,237,0.1);
+      color: var(--primary-light);
+      border-radius: 8px;
+      padding: 2px 10px;
+      font-size: 0.78rem;
+      font-weight: 700;
+    }
+
+    .action-panel-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 5px 12px;
+      border-radius: 8px;
+      border: none;
+      font-family: var(--font-main);
+      font-size: 0.8rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+      white-space: nowrap;
+    }
+
+    .action-panel-btn.discount {
+      background: rgba(245,158,11,0.15);
+      color: var(--warning);
+      border: 1px solid rgba(245,158,11,0.4);
+    }
+    .action-panel-btn.discount:hover { background: var(--warning); color:#1a1a1a; }
+
+    .action-panel-btn.writeoff {
+      background: rgba(239,68,68,0.12);
+      color: var(--danger);
+      border: 1px solid rgba(239,68,68,0.35);
+    }
+    .action-panel-btn.writeoff:hover { background: var(--danger); color:#fff; }
+
+    .action-panel-btn.restore {
+      background: rgba(16,185,129,0.12);
+      color: var(--success);
+      border: 1px solid rgba(16,185,129,0.35);
+    }
+    .action-panel-btn.restore:hover { background: var(--success); color:#fff; }
+
+    /* بطاقات الملخص — إضافة حقل الخسارة المالية */
+    .exp-loss {
+      font-size: 0.72rem;
+      color: var(--danger);
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    /* شريط التنبيه الذكي أعلى الصفحة */
+    .expiry-alert-banner {
+      background: linear-gradient(135deg, rgba(234,88,12,0.15), rgba(239,68,68,0.1));
+      border: 1px solid rgba(234,88,12,0.4);
+      border-radius: var(--radius);
+      padding: 12px 18px;
+      margin-bottom: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      animation: pulse-border 2s infinite;
+    }
+
+    @keyframes pulse-border {
+      0%,100% { border-color: rgba(234,88,12,0.4); }
+      50%      { border-color: rgba(239,68,68,0.7); }
+    }
+
+    .expiry-alert-banner.hidden { display: none; }
+
     .action-buttons {
       display: flex;
       gap: 6px;
@@ -1107,20 +1195,23 @@
           <div>
             <div class="exp-label">دفعات منتهية الصلاحية</div>
             <div class="exp-value" id="expSumExpired">—</div>
+            <div class="exp-loss" id="expSumExpiredLoss"></div>
           </div>
         </div>
         <div class="expiry-summary-card">
           <div class="exp-icon orange"><i class="fa-solid fa-triangle-exclamation"></i></div>
           <div>
-            <div class="exp-label">دفعات حرجة (أقل من 7 أيام)</div>
+            <div class="exp-label">دفعات حرجة (أقل 15 يوم)</div>
             <div class="exp-value" id="expSumCritical">—</div>
+            <div class="exp-loss" id="expSumCriticalLoss"></div>
           </div>
         </div>
         <div class="expiry-summary-card">
           <div class="exp-icon yellow"><i class="fa-solid fa-clock"></i></div>
           <div>
-            <div class="exp-label">دفعات تنبيه (في النافذة الزمنية)</div>
+            <div class="exp-label">إجمالي الخسارة المتوقعة</div>
             <div class="exp-value" id="expSumWarning">—</div>
+            <div class="exp-loss" id="expSumTotalLoss"></div>
           </div>
         </div>
       </div>
@@ -1148,18 +1239,20 @@
               <th>#</th>
               <th>المنتج</th>
               <th>رقم الدفعة</th>
-              <th>الكمية المتبقية</th>
-              <th>تاريخ الاستلام</th>
+              <th>الكمية</th>
               <th>تاريخ الصلاحية</th>
-              <th>الأيام المتبقية</th>
+              <th>الأيام</th>
+              <th>الخطر الفعلي</th>
+              <th>الخسارة المتوقعة</th>
               <th>الحالة</th>
+              <th>الإجراء</th>
             </tr>
           </thead>
           <tbody id="expiryTbody">
             <tr>
-              <td colspan="8" style="text-align:center; padding:40px; color:var(--text-secondary);">
+              <td colspan="10" style="text-align:center; padding:40px; color:var(--text-secondary);">
                 <i class="fa-solid fa-spinner fa-spin" style="font-size:1.5rem;"></i>
-                <p style="margin-top:10px;">جاري التحميل...</p>
+                <p style="margin-top:10px;">جاري التحليل...</p>
               </td>
             </tr>
           </tbody>
@@ -1269,6 +1362,75 @@
   </div>
 </div>
 
+<!-- ══ شريط التنبيه الذكي (يظهر عند وجود خسائر حقيقية) ══ -->
+<div class="expiry-alert-banner hidden" id="expiryBanner">
+  <div style="display:flex; align-items:center; gap:10px; flex:1;">
+    <i class="fa-solid fa-triangle-exclamation" style="color:#ea580c; font-size:1.2rem;"></i>
+    <span id="expiryBannerText" style="font-weight:800; font-size:0.92rem;"></span>
+  </div>
+  <button class="btn btn-danger" style="font-size:0.82rem; padding:6px 14px;"
+          onclick="switchTab('expiry')">
+    <i class="fa-solid fa-arrow-left"></i> لوحة القرارات
+  </button>
+  <button onclick="document.getElementById('expiryBanner').classList.add('hidden')"
+          style="background:transparent; border:none; color:var(--text-secondary);
+                 cursor:pointer; font-size:1.1rem; padding:4px 8px;">✕</button>
+</div>
+
+<!-- ══ modal إجراء الدفعة ══ -->
+<div class="modal-overlay" id="batchActionModal">
+  <div class="modal modal-sm">
+    <div class="modal-header">
+      <span class="modal-title" id="batchActionTitle">
+        <i class="fa-solid fa-bolt"></i> إجراء الدفعة
+      </span>
+      <button class="modal-close" onclick="closeModal('batchActionModal')">✕</button>
+    </div>
+
+    <div id="batchActionBody" style="margin-bottom:16px;"></div>
+
+    <!-- خصم -->
+    <div id="discountSection" style="display:none;">
+      <div style="background:var(--bg-dark); border-radius:8px; padding:14px; margin-bottom:14px;">
+        <div style="color:var(--text-secondary); font-size:0.82rem; margin-bottom:8px; font-weight:700;">
+          <i class="fa-solid fa-tag"></i> نسبة الخصم الجديدة
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <input type="number" id="discountPctInput" class="form-input"
+                 min="1" max="90" step="1" style="width:100px; text-align:center; font-size:1.2rem; font-weight:800;"
+                 oninput="previewDiscount()"/>
+          <span style="font-weight:700;">%</span>
+          <span id="discountPreview" style="color:var(--success); font-weight:800; font-size:0.9rem;"></span>
+        </div>
+        <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:8px;">
+          * سيُطبَّق على سعر البيع في صفحة المنتج ويُسجَّل السعر الأصلي
+        </div>
+      </div>
+    </div>
+
+    <!-- شطب -->
+    <div id="writeoffSection" style="display:none;">
+      <div style="background:rgba(239,68,68,0.08); border:1px solid rgba(239,68,68,0.3);
+                  border-radius:8px; padding:14px; margin-bottom:14px;">
+        <div style="color:var(--danger); font-weight:800; margin-bottom:6px;">
+          <i class="fa-solid fa-triangle-exclamation"></i> تأكيد الشطب
+        </div>
+        <div id="writeoffDetail" style="font-size:0.88rem; color:var(--text-secondary);"></div>
+        <div style="font-size:0.75rem; color:var(--text-secondary); margin-top:8px;">
+          * ستُسجَّل الخسارة تلقائياً في قسم المصاريف
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="batchActionConfirmBtn" onclick="confirmBatchAction()">
+        <i class="fa-solid fa-check"></i> تأكيد
+      </button>
+      <button class="btn btn-secondary" onclick="closeModal('batchActionModal')">إلغاء</button>
+    </div>
+  </div>
+</div>
+
 <!-- Sidebar -->
 <div class="sidebar-overlay" id="sidebarOverlay"></div>
 <div class="sidebar" id="sidebar">
@@ -1298,7 +1460,8 @@ let currentFilter = '';
 let currentFamilyFilter = '';
 let currentStockFilter = '';
 let movementLogs = [];
-let expiryTabFilter = 'all';   // فلتر تبويب الصلاحية
+let expiryTabFilter  = 'all';  // فلتر تبويب الصلاحية
+let batchActionState = {};    // حالة modal إجراء الدفعة الحالية
 
 // ============================================================
 //  التهيئة
@@ -1321,6 +1484,8 @@ async function init() {
   await updateAlerts();
   await loadFamiliesSelect();
   await loadProducts();
+  // شريط التنبيه الذكي
+  updateAlertBanner();
   
   // تهيئة الأحداث
   initKeyboardShortcuts();
@@ -2404,135 +2569,368 @@ function doLogout() {
 }
 
 // ============================================================
-//  تبويب الصلاحية — FEFO
+//  تبويب الصلاحية — ExpiryRiskEngine
 // ============================================================
 
-// تحديد فئة وعنوان الحالة بناءً على الأيام المتبقية
-function _expiryLevel(daysSince) {
-  if (daysSince >= 0)               return { cls: 'expiry-danger',   label: '🔴 منتهي',   sort: 0 };
-  if (daysSince >= -7)              return { cls: 'expiry-critical',  label: '🟠 حرج',     sort: 1 };
-  if (daysSince >= -expiryAlertDays) return { cls: 'expiry-warning',  label: '🟡 تنبيه',   sort: 2 };
-  return                                   { cls: 'expiry-ok',        label: '🟢 آمن',     sort: 3 };
+// تحويل EXPIRY_LEVELS إلى CSS class للـ badge
+function _levelToCls(levelId) {
+  const map = {
+    EXPIRED:  'expiry-danger',
+    CRITICAL: 'expiry-critical',
+    WARNING:  'expiry-warning',
+    WATCH:    'expiry-warning',
+    SAFE:     'expiry-ok',
+  };
+  return map[levelId] || 'expiry-ok';
 }
 
 async function loadExpiryTab() {
-  // إعادة تحميل الدفعات لضمان الحداثة
-  await loadData();
-
   const tbody = document.getElementById('expiryTbody');
   if (!tbody) return;
 
-  // جمع كل العناصر: دفعات جديدة + منتجات قديمة بدون دفعة
-  const rows = [];
-  let batchCounter = 0;
+  // إظهار مؤشر التحميل
+  tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;">
+    <i class="fa-solid fa-spinner fa-spin" style="font-size:1.5rem;color:var(--primary);"></i>
+    <p style="margin-top:10px;color:var(--text-secondary);">جاري تحليل بيانات المبيعات...</p>
+  </td></tr>`;
 
-  // ① الدفعات الجديدة من productBatches
-  allBatches.forEach(b => {
-    if (!b.expiryDate) return;
-    const product = allProducts.find(p => p.id === b.productId);
-    if (!product) return;
-    const daysSince = window.dateUtils.daysBetween(b.expiryDate);
-    const level     = _expiryLevel(daysSince);
-    batchCounter++;
-    rows.push({
-      num:         batchCounter,
-      productName: product.name,
-      batchId:     b.id,
-      quantity:    b.quantity || 0,
-      receivedDate:b.receivedDate || '—',
-      expiryDate:  b.expiryDate,
-      daysSince,
-      level,
-      isBatch:     true
-    });
-  });
+  // ── استدعاء ExpiryRiskEngine ────────────────────────────
+  const results = await window.ExpiryRiskEngine.analyze();
+  const summary = window.ExpiryRiskEngine.summarize(results);
+  const fmt     = window.currencyFormatter.format.bind(window.currencyFormatter);
 
-  // ② fallback: منتجات قديمة ليس لها دفعة في productBatches
-  allProducts
-    .filter(p => p.expiryDate && !allBatches.some(b => b.productId === p.id))
-    .forEach(p => {
-      const daysSince = window.dateUtils.daysBetween(p.expiryDate);
-      const level     = _expiryLevel(daysSince);
-      batchCounter++;
-      rows.push({
-        num:         batchCounter,
-        productName: p.name,
-        batchId:     null,
-        quantity:    p.quantity || 0,
-        receivedDate:'—',
-        expiryDate:  p.expiryDate,
-        daysSince,
-        level,
-        isBatch:     false
-      });
-    });
-
-  // ترتيب: الأخطر أولاً، ثم الأقرب للانتهاء
-  rows.sort((a, b) => {
-    if (a.level.sort !== b.level.sort) return a.level.sort - b.level.sort;
-    return a.expiryDate.localeCompare(b.expiryDate);
-  });
-
-  // تحديث بطاقات الملخص
-  const expiredCount  = rows.filter(r => r.level.sort === 0).length;
-  const criticalCount = rows.filter(r => r.level.sort === 1).length;
-  const warningCount  = rows.filter(r => r.level.sort === 2).length;
+  // ── تحديث بطاقات الملخص ────────────────────────────────
   const s = id => document.getElementById(id);
-  if (s('expSumExpired'))  s('expSumExpired').textContent  = expiredCount;
-  if (s('expSumCritical')) s('expSumCritical').textContent = criticalCount;
-  if (s('expSumWarning'))  s('expSumWarning').textContent  = warningCount;
+  if (s('expSumExpired')) {
+    s('expSumExpired').textContent = summary.expired.length;
+    if (s('expSumExpiredLoss'))
+      s('expSumExpiredLoss').textContent =
+        summary.expiredLoss > 0 ? `خسارة: ${fmt(summary.expiredLoss)}` : '';
+  }
+  if (s('expSumCritical')) {
+    s('expSumCritical').textContent = summary.critical.length;
+    const critLoss = summary.critical.reduce((a, r) => a + r.lossAmount, 0);
+    if (s('expSumCriticalLoss'))
+      s('expSumCriticalLoss').textContent =
+        critLoss > 0 ? `خطر: ${fmt(critLoss)}` : '';
+  }
+  if (s('expSumWarning')) {
+    s('expSumWarning').textContent = summary.totalLoss > 0 ? fmt(summary.totalLoss) : '0 DA';
+    if (s('expSumTotalLoss')) s('expSumTotalLoss').textContent = '';
+  }
 
-  // تطبيق الفلتر الحالي
-  const filtered = rows.filter(r => {
-    if (expiryTabFilter === 'all')      return true;
-    if (expiryTabFilter === 'expired')  return r.level.sort === 0;
-    if (expiryTabFilter === 'critical') return r.level.sort === 1;
-    if (expiryTabFilter === 'warning')  return r.level.sort === 2;
+  // ── تطبيق الفلتر ───────────────────────────────────────
+  const filtered = results.filter(r => {
+    if (expiryTabFilter === 'all')      return r.level.id !== 'SAFE';
+    if (expiryTabFilter === 'expired')  return r.level.id === 'EXPIRED';
+    if (expiryTabFilter === 'critical') return r.level.id === 'CRITICAL';
+    if (expiryTabFilter === 'warning')
+      return r.level.id === 'WARNING' || r.level.id === 'WATCH';
     return true;
   });
 
   if (filtered.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="8" style="text-align:center; padding:50px; color:var(--text-secondary);">
-          <i class="fa-solid fa-circle-check" style="font-size:2.5rem; color:var(--success); opacity:0.6;"></i>
-          <p style="margin-top:14px; font-weight:700;">لا توجد دفعات في هذه الفئة ✅</p>
+        <td colspan="10" style="text-align:center; padding:50px; color:var(--text-secondary);">
+          <i class="fa-solid fa-circle-check"
+             style="font-size:2.5rem; color:var(--success); opacity:0.7;"></i>
+          <p style="margin-top:14px; font-weight:800; font-size:1rem;">
+            ✅ لا توجد دفعات في خطر
+          </p>
         </td>
       </tr>`;
     return;
   }
 
+  const fmt2 = n => n > 0 ? fmt(n) : '—';
+
   tbody.innerHTML = filtered.map((r, idx) => {
-    const daysLabel = r.daysSince >= 0
-      ? `منذ ${r.daysSince} يوم`
-      : `${-r.daysSince} يوم متبقي`;
-    const batchBadge = r.isBatch
-      ? `<span class="batch-num">دفعة #${r.batchId}</span>`
+    const cls      = _levelToCls(r.level.id);
+    const daysText = r.daysLeft >= 0
+      ? `<span style="color:var(--danger); font-weight:900;">منتهي منذ ${r.daysLeft} يوم</span>`
+      : `<span style="font-weight:800;">${r.daysLeft * -1} يوم</span>`;
+
+    const riskText = r.atRiskQty > 0
+      ? `<span class="risk-loss-badge">${r.atRiskQty.toFixed(0)} وحدة</span>`
+      : `<span style="color:var(--success); font-size:0.8rem; font-weight:700;">آمن ✅</span>`;
+
+    const lossText = r.lossAmount > 0
+      ? `<span class="risk-loss-badge">${fmt(r.lossAmount)}</span>`
+      : '—';
+
+    const rateText = r.dailyRate > 0
+      ? `<span class="risk-rate-badge">${r.dailyRate}/يوم</span>`
+      : '';
+
+    const batchBadge = r.batch
+      ? `<span class="batch-num">دفعة #${r.batch.id}</span>`
       : `<span class="batch-num" style="background:rgba(99,102,241,0.1);color:#818cf8;">قديم</span>`;
+
+    // أزرار الإجراء حسب المستوى
+    let actionBtns = '';
+    if (r.level.id === 'EXPIRED') {
+      actionBtns = `
+        <button class="action-panel-btn writeoff"
+                onclick="openBatchAction('writeoff', ${JSON.stringify(idx)})">
+          <i class="fa-solid fa-trash-can"></i> شطب
+        </button>`;
+    } else if (r.level.id === 'CRITICAL' || r.level.id === 'WARNING') {
+      actionBtns = `
+        <button class="action-panel-btn discount"
+                onclick="openBatchAction('discount', ${idx})">
+          <i class="fa-solid fa-tag"></i> خصم
+        </button>
+        <button class="action-panel-btn writeoff"
+                onclick="openBatchAction('writeoff', ${idx})">
+          <i class="fa-solid fa-trash-can"></i> شطب
+        </button>`;
+    } else if (r.level.id === 'WATCH') {
+      actionBtns = `
+        <button class="action-panel-btn discount"
+                onclick="openBatchAction('discount', ${idx})">
+          <i class="fa-solid fa-tag"></i> خصم
+        </button>`;
+    }
+
     return `
-      <tr>
+      <tr data-result-idx="${idx}">
         <td style="color:var(--text-secondary); font-weight:700;">${idx + 1}</td>
-        <td style="font-weight:800;">${window.sanitizer.escape(r.productName)}</td>
+        <td>
+          <div style="font-weight:800;">${window.sanitizer.escape(r.product?.name || '—')}</div>
+          ${rateText}
+        </td>
         <td>${batchBadge}</td>
-        <td style="font-weight:800; color:var(--primary-light);">${r.quantity}</td>
-        <td style="color:var(--text-secondary);">${r.receivedDate !== '—' ? window.dateUtils.formatDate(r.receivedDate) : '—'}</td>
-        <td style="font-weight:700;">${window.dateUtils.formatDate(r.expiryDate)}</td>
-        <td style="font-weight:800;">${daysLabel}</td>
-        <td><span class="expiry-badge ${r.level.cls}">${r.level.label}</span></td>
+        <td style="font-weight:800; color:var(--primary-light);">${r.qty}</td>
+        <td style="font-weight:700;">${window.dateUtils.formatDate(r.batch?.expiryDate || r.product?.expiryDate || '')}</td>
+        <td>${daysText}</td>
+        <td>${riskText}</td>
+        <td>${lossText}</td>
+        <td><span class="expiry-badge ${cls}">${r.level.label}</span></td>
+        <td>
+          <div style="display:flex; gap:5px; flex-wrap:wrap;">${actionBtns}</div>
+        </td>
       </tr>`;
   }).join('');
+
+  // حفظ النتائج للرجوع إليها من modal الإجراء
+  window._expiryResults = filtered;
 }
 
 function filterExpiryTab(filter) {
   expiryTabFilter = filter;
-  // تمييز الزر النشط
   ['all','expired','critical','warning'].forEach(f => {
     const btn = document.getElementById(`efBtn-${f}`);
     if (!btn) return;
-    btn.classList.toggle('btn-primary', f === filter);
+    btn.classList.toggle('btn-primary',   f === filter);
     btn.classList.toggle('btn-secondary', f !== filter);
   });
   loadExpiryTab();
+}
+
+// ── فتح modal الإجراء ──────────────────────────────────────
+function openBatchAction(type, idx) {
+  const results = window._expiryResults;
+  if (!results || idx >= results.length) return;
+  const r = results[idx];
+  batchActionState = { type, result: r };
+
+  const fmt   = window.currencyFormatter.format.bind(window.currencyFormatter);
+  const pName = r.product?.name || '—';
+  const qty   = r.qty;
+  const loss  = fmt(r.lossAmount);
+  const disc  = r.suggestedDisc || 0;
+
+  // رأس المودال
+  const iconMap = { discount:'fa-tag', writeoff:'fa-trash-can' };
+  document.getElementById('batchActionTitle').innerHTML =
+    `<i class="fa-solid ${iconMap[type] || 'fa-bolt'}"></i> ` +
+    (type === 'discount' ? 'تطبيق خصم' : 'شطب الدفعة');
+
+  // جسم المودال
+  document.getElementById('batchActionBody').innerHTML = `
+    <div style="background:var(--bg-dark); border-radius:8px; padding:12px; margin-bottom:4px;">
+      <div style="font-weight:800; font-size:1rem; margin-bottom:6px;">
+        📦 ${window.sanitizer.escape(pName)}
+      </div>
+      <div style="display:flex; gap:14px; font-size:0.85rem; color:var(--text-secondary); flex-wrap:wrap;">
+        <span>الكمية: <strong style="color:var(--primary-light);">${qty}</strong></span>
+        <span>الأيام: <strong style="color:${r.daysLeft <= 0 ? 'var(--danger)' : 'var(--warning)'};">
+          ${r.daysLeft <= 0 ? 'منتهي' : r.daysLeft + ' يوم'}
+        </strong></span>
+        ${r.lossAmount > 0
+          ? `<span>الخسارة المتوقعة: <strong style="color:var(--danger);">${loss}</strong></span>`
+          : ''}
+      </div>
+    </div>`;
+
+  // إظهار/إخفاء أقسام المودال
+  document.getElementById('discountSection').style.display =
+    type === 'discount' ? 'block' : 'none';
+  document.getElementById('writeoffSection').style.display =
+    type === 'writeoff' ? 'block' : 'none';
+
+  if (type === 'discount') {
+    document.getElementById('discountPctInput').value = disc || 10;
+    previewDiscount();
+  }
+
+  if (type === 'writeoff') {
+    document.getElementById('writeoffDetail').innerHTML =
+      `سيتم شطب <strong>${qty}</strong> وحدة من "${window.sanitizer.escape(pName)}"
+       وتسجيل خسارة قدرها <strong style="color:var(--danger);">${fmt(qty * (r.product?.buyPrice||0))}</strong>
+       في المصاريف تلقائياً.`;
+  }
+
+  window.modalManager.open('batchActionModal');
+}
+
+// ── معاينة سعر ما بعد الخصم ───────────────────────────────
+function previewDiscount() {
+  const pct     = parseFloat(document.getElementById('discountPctInput').value) || 0;
+  const r       = batchActionState.result;
+  const price   = r.product?.sellPrice || 0;
+  const newPrice = price * (1 - pct / 100);
+  const fmt     = window.currencyFormatter.format.bind(window.currencyFormatter);
+  document.getElementById('discountPreview').textContent =
+    price > 0 ? `${fmt(price)} → ${fmt(newPrice)}` : '';
+}
+
+// ── تنفيذ الإجراء ──────────────────────────────────────────
+async function confirmBatchAction() {
+  const { type, result: r } = batchActionState;
+  if (!r) return;
+
+  const user    = window.sessionManager.getUser();
+  const pName   = r.product?.name || '—';
+  const fmt     = window.currencyFormatter.format.bind(window.currencyFormatter);
+
+  try {
+    if (type === 'discount') {
+      // ① قراءة نسبة الخصم
+      const pct = parseFloat(document.getElementById('discountPctInput').value) || 0;
+      if (pct <= 0 || pct >= 100) {
+        window.toast.show('أدخل نسبة خصم صحيحة بين 1 و99', 'warning');
+        return;
+      }
+      const product      = await window.dbManager.get('products', r.product.id);
+      const originalPrice = product.sellPrice;
+      const newPrice      = parseFloat((originalPrice * (1 - pct / 100)).toFixed(2));
+
+      // ② تحديث سعر المنتج
+      product.sellPrice = newPrice;
+      await window.dbManager.put('products', product);
+
+      // ③ تحديث الدفعة بالخصم
+      if (r.batch) {
+        r.batch.isDiscounted      = true;
+        r.batch.originalSellPrice = originalPrice;
+        r.batch.discountPct       = pct;
+        await window.dbManager.put('productBatches', r.batch);
+      }
+
+      // ④ تسجيل في logs
+      await window.dbManager.add('logs', {
+        action:      'expiry_discount',
+        productId:   r.product.id,
+        productName: pName,
+        batchId:     r.batch?.id || null,
+        oldPrice:    originalPrice,
+        newPrice,
+        discountPct: pct,
+        userId:      user?.id,
+        date:        window.dateUtils.now(),
+      });
+
+      window.toast.show(`✅ تم تطبيق خصم ${pct}% على "${pName}"`, 'success');
+
+    } else if (type === 'writeoff') {
+      // ① حساب الخسارة الفعلية
+      const qty      = r.qty;
+      const buyPrice = r.product?.buyPrice || 0;
+
+      // ② إنقاص الكمية من المنتج
+      if (r.product) {
+        const product = await window.dbManager.get('products', r.product.id);
+        product.quantity = Math.max(0, (product.quantity || 0) - qty);
+        await window.dbManager.put('products', product);
+      }
+
+      // ③ تحديث الدفعة
+      if (r.batch) {
+        r.batch.quantity      = 0;
+        r.batch.isWrittenOff  = true;
+        r.batch.writtenOffDate = window.dateUtils.today();
+        r.batch.writtenOffQty = qty;
+        await window.dbManager.put('productBatches', r.batch);
+      }
+
+      // ④ تسجيل الخسارة في expenses (عبر recordExpiryLoss)
+      await window.recordExpiryLoss({
+        productName: pName,
+        batchId:     r.batch?.id || null,
+        qty,
+        buyPrice,
+        note: `شطب صلاحية: ${pName} — ${qty} وحدة — ${window.dateUtils.today()}`,
+      });
+
+      // ⑤ تسجيل في logs
+      await window.dbManager.add('logs', {
+        action:      'expiry_writeoff',
+        productId:   r.product?.id,
+        productName: pName,
+        batchId:     r.batch?.id || null,
+        qty,
+        lossAmount:  qty * buyPrice,
+        userId:      user?.id,
+        date:        window.dateUtils.now(),
+      });
+
+      window.toast.show(`✅ تم شطب ${qty} وحدة من "${pName}" وتسجيل الخسارة`, 'success');
+    }
+
+    window.modalManager.close('batchActionModal');
+    await loadData();
+    await updateAlerts();
+    updateAlertBanner();
+    loadExpiryTab();
+
+  } catch (e) {
+    console.error('[confirmBatchAction]', e);
+    window.toast.show('حدث خطأ أثناء التنفيذ', 'error');
+  }
+}
+
+// ── شريط التنبيه الذكي ────────────────────────────────────
+async function updateAlertBanner() {
+  try {
+    const results = await window.ExpiryRiskEngine.analyze();
+    const summary = window.ExpiryRiskEngine.summarize(results);
+    const banner  = document.getElementById('expiryBanner');
+    const text    = document.getElementById('expiryBannerText');
+    if (!banner || !text) return;
+
+    const fmt     = window.currencyFormatter.format.bind(window.currencyFormatter);
+    const urgent  = summary.expired.length + summary.critical.length;
+
+    if (urgent === 0 && summary.totalLoss === 0) {
+      banner.classList.add('hidden');
+      return;
+    }
+
+    let msg = '';
+    if (summary.expired.length > 0)
+      msg += `⚫ ${summary.expired.length} دفعة منتهية الصلاحية  `;
+    if (summary.critical.length > 0)
+      msg += `🔴 ${summary.critical.length} دفعة حرجة (أقل 15 يوم)  `;
+    if (summary.totalLoss > 0)
+      msg += `— خسارة متوقعة: ${fmt(summary.totalLoss)}`;
+
+    text.textContent  = msg;
+    banner.classList.remove('hidden');
+  } catch (e) {
+    console.warn('[updateAlertBanner]', e);
+  }
 }
 
 // ============================================================
