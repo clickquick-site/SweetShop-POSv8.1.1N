@@ -1335,8 +1335,14 @@ async function init() {
 //  تحميل البيانات
 // ══════════════════════════════════════════════════════════════
 async function loadData() {
-  allProducts = await window.dbManager.getAll('products');
+  allProducts  = await window.dbManager.getAll('products');
   allCustomers = await window.dbManager.getAll('customers');
+  // تحميل الدفعات وتخزينها للـ ExpirySaleGuard
+  try {
+    window._cachedBatches = await window.dbManager.getAll('productBatches');
+  } catch (e) {
+    window._cachedBatches = [];
+  }
   allFamilies = await window.dbManager.getAll('families');
   
   // إثراء المنتجات بأسماء العائلات
@@ -1427,12 +1433,54 @@ function renderCart() {
 
 function addToCart(product, quantity = null) {
   const qty = quantity || parseInt(document.getElementById('quickQty').value) || 1;
-  
+
   if (product.quantity < qty) {
     window.toast.show(`⚠️ الكمية المتاحة: ${product.quantity} فقط`, 'warning');
     window.SoundManager?.play('out-of-stock');
     return;
   }
+
+  // ── ExpirySaleGuard: فحص صلاحية الدفعة الأقرب للانتهاء ──
+  if (product.id > 0) {
+    const batches = (window._cachedBatches || [])
+      .filter(b => b.productId === product.id && (b.quantity || 0) > 0 && b.expiryDate)
+      .sort((a, b) => a.expiryDate.localeCompare(b.expiryDate));
+
+    if (batches.length > 0) {
+      const nearest   = batches[0];
+      const daysLeft  = window.ExpiryRiskEngine?._daysLeft(nearest.expiryDate) ?? null;
+      if (daysLeft !== null) {
+        if (daysLeft <= 0) {
+          // منتهي الصلاحية — منع البيع إلزامياً
+          window.toast.show(
+            `❌ "${product.name}" منتهي الصلاحية — لا يمكن بيعه`,
+            'error', 4000
+          );
+          window.SoundManager?.play('warning');
+          return;
+        }
+        if (daysLeft <= 15) {
+          // حرج — تحذير ويُضاف مع علم البائع
+          window.toast.show(
+            `⚠️ تنبيه: "${product.name}" ينتهي خلال ${daysLeft} يوم`,
+            'warning', 3500
+          );
+        }
+      }
+    } else if (product.expiryDate) {
+      // fallback: منتج قديم بدون دفعة
+      const daysLeft = window.ExpiryRiskEngine?._daysLeft(product.expiryDate) ?? null;
+      if (daysLeft !== null && daysLeft <= 0) {
+        window.toast.show(
+          `❌ "${product.name}" منتهي الصلاحية — لا يمكن بيعه`,
+          'error', 4000
+        );
+        window.SoundManager?.play('warning');
+        return;
+      }
+    }
+  }
+  // ─────────────────────────────────────────────────────────
   
   const existing = cart.findIndex(i => i.productId === product.id);
   
@@ -2644,126 +2692,99 @@ function doLogout() {
 async function checkExpiryAlert() {
   try {
     // فحص إذا ظهرت النافذة اليوم مسبقاً
-    const todayStr   = window.dateUtils.today();
-    const lastShown  = localStorage.getItem('posdz_expiry_alert_date');
-    if (lastShown === todayStr) return; // لا تُظهر مرتين في نفس اليوم
+    const todayStr  = window.dateUtils.today();
+    const lastShown = localStorage.getItem('posdz_expiry_alert_date');
+    if (lastShown === todayStr) return;
 
-    // قراءة الدفعات والمنتجات من DB
-    const batches  = await window.dbManager.getAll('productBatches');
-    const products = await window.dbManager.getAll('products');
-    const expiryAlertDays = parseInt(await window.getSetting('expiryAlertDays')) || 30;
+    // ── استخدام ExpiryRiskEngine للحصول على الخطر الحقيقي ──
+    if (!window.ExpiryRiskEngine) return;
+    const results = await window.ExpiryRiskEngine.analyze();
+    const summary = window.ExpiryRiskEngine.summarize(results);
 
-    // جمع العناصر الحرجة: دفعات جديدة
-    const criticalRows = [];
+    // لا توجد مخاطر حقيقية → لا نُظهر النافذة
+    const urgent = results.filter(r =>
+      r.level.id !== 'SAFE' && r.atRiskQty > 0
+    );
+    if (urgent.length === 0) return;
 
-    batches
-      .filter(b => b.expiryDate && (b.quantity || 0) > 0)
-      .forEach(b => {
-        const daysSince = window.dateUtils.daysBetween(b.expiryDate);
-        // نعرض فقط: منتهي أو حرج (أقل من 7 أيام) أو ضمن نافذة التنبيه
-        if (daysSince >= -expiryAlertDays) {
-          const prod = products.find(p => p.id === b.productId);
-          criticalRows.push({
-            name:       prod ? prod.name : (b.productName || '—'),
-            expiryDate: b.expiryDate,
-            quantity:   b.quantity,
-            daysSince
-          });
-        }
-      });
+    const fmt = window.currencyFormatter.format.bind(window.currencyFormatter);
 
-    // fallback: منتجات قديمة بدون دفعة
-    products
-      .filter(p => p.expiryDate && !batches.some(b => b.productId === p.id))
-      .forEach(p => {
-        const daysSince = window.dateUtils.daysBetween(p.expiryDate);
-        if (daysSince >= -expiryAlertDays) {
-          criticalRows.push({
-            name:       p.name,
-            expiryDate: p.expiryDate,
-            quantity:   p.quantity,
-            daysSince
-          });
-        }
-      });
-
-    // لا شيء حرج → لا نُظهر النافذة
-    if (criticalRows.length === 0) return;
-
-    // ترتيب: الأخطر أولاً
-    criticalRows.sort((a, b) => b.daysSince - a.daysSince);
-
-    // حساب الأعداد لكل مستوى
-    const cntExpired  = criticalRows.filter(r => r.daysSince >= 0).length;
-    const cntCritical = criticalRows.filter(r => r.daysSince < 0 && r.daysSince >= -7).length;
-    const cntWarning  = criticalRows.filter(r => r.daysSince < -7).length;
-
-    // بناء الملخص
-    const summary = document.getElementById('expiryAlertSummary');
-    if (summary) {
-      const chip = (icon, label, val, color) => val > 0 ? `
+    // ── بناء الملخص ──────────────────────────────────────────
+    const sumEl = document.getElementById('expiryAlertSummary');
+    if (sumEl) {
+      const chip = (icon, label, val, color, extra) => val > 0 ? `
         <div style="display:flex;align-items:center;gap:6px;
-          background:${color}22; border:1px solid ${color}55;
-          border-radius:20px; padding:5px 12px; font-size:0.82rem; font-weight:800;">
-          ${icon} <span style="color:${color};">${val} ${label}</span>
+          background:${color}22;border:1px solid ${color}55;
+          border-radius:20px;padding:5px 12px;font-size:0.82rem;font-weight:800;">
+          ${icon}
+          <div>
+            <span style="color:${color};">${val} ${label}</span>
+            ${extra ? `<div style="font-size:0.72rem;color:${color};opacity:0.8;">${extra}</div>` : ''}
+          </div>
         </div>` : '';
-      summary.innerHTML =
-        chip('❌', 'منتهية',  cntExpired,  '#ef4444') +
-        chip('⚠️', 'حرجة',    cntCritical, '#ea580c') +
-        chip('🕐', 'تنبيه',   cntWarning,  '#f59e0b');
+
+      const expiredLoss  = summary.expiredLoss > 0  ? fmt(summary.expiredLoss)  : null;
+      const criticalLoss = summary.critical.reduce((s,r)=>s+r.lossAmount,0);
+
+      sumEl.innerHTML =
+        chip('⚫', 'منتهية',          summary.expired.length,
+             '#ef4444', expiredLoss ? `خسارة محققة: ${expiredLoss}` : null) +
+        chip('🔴', 'حرجة (15 يوم)',   summary.critical.length,
+             '#ea580c', criticalLoss > 0 ? `خطر: ${fmt(criticalLoss)}` : null) +
+        (summary.totalLoss > 0
+          ? chip('💰', 'إجمالي الخسارة', 1,
+                 '#f59e0b', fmt(summary.totalLoss))
+          : '');
     }
 
-    // بناء صفوف الجدول
+    // ── بناء جدول الأولويات ──────────────────────────────────
     const tbody = document.getElementById('expiryAlertTbody');
     if (tbody) {
-      tbody.innerHTML = criticalRows.slice(0, 15).map(r => {
+      const top15 = urgent.slice(0, 15);
+      tbody.innerHTML = top15.map(r => {
+        const pName    = r.product?.name || '—';
+        const daysLeft = r.daysLeft;
         let badgeCls, badgeLabel;
-        if (r.daysSince >= 0) {
-          badgeCls = 'expiry-danger';   badgeLabel = '❌ منتهي';
-        } else if (r.daysSince >= -7) {
-          badgeCls = 'expiry-critical'; badgeLabel = `⚠️ ${-r.daysSince} يوم`;
+        if (daysLeft <= 0) {
+          badgeCls = 'expiry-danger';   badgeLabel = '⚫ منتهي';
+        } else if (daysLeft <= 15) {
+          badgeCls = 'expiry-critical'; badgeLabel = `🔴 ${daysLeft} يوم`;
+        } else if (daysLeft <= 30) {
+          badgeCls = 'expiry-warning';  badgeLabel = `🟠 ${daysLeft} يوم`;
         } else {
-          badgeCls = 'expiry-warning';  badgeLabel = `🕐 ${-r.daysSince} يوم`;
+          badgeCls = 'expiry-warning';  badgeLabel = `🟡 ${daysLeft} يوم`;
         }
+        const lossStr = r.lossAmount > 0
+          ? `<span style="color:var(--danger);font-size:0.75rem;font-weight:800;">
+              ${fmt(r.lossAmount)}</span>`
+          : '—';
         return `
           <tr style="border-bottom:1px solid var(--border);">
-            <td style="padding:8px 10px; font-weight:700;">
-              ${window.sanitizer ? window.sanitizer.escape(r.name) : r.name}
+            <td style="padding:8px 10px;font-weight:700;">
+              ${window.sanitizer.escape(pName)}
             </td>
-            <td style="padding:8px 10px; text-align:center; color:var(--text-secondary); font-size:0.8rem;">
-              ${window.dateUtils.formatDate(r.expiryDate)}
+            <td style="padding:8px 10px;text-align:center;">
+              <span class="${badgeCls}" style="display:inline-block;
+                padding:3px 10px;border-radius:14px;font-size:0.75rem;
+                font-weight:800;background:var(--bg-dark);">${badgeLabel}</span>
             </td>
-            <td style="padding:8px 10px; text-align:center;">
-              <span style="
-                display:inline-block; padding:3px 10px; border-radius:14px;
-                font-size:0.75rem; font-weight:800;
-                background:var(--bg-dark);
-              " class="${badgeCls}">${badgeLabel}</span>
-            </td>
+            <td style="padding:8px 10px;text-align:center;">${lossStr}</td>
           </tr>`;
       }).join('');
 
-      // إذا تجاوز 15 صفاً نضيف تلميحاً
-      if (criticalRows.length > 15) {
-        tbody.innerHTML += `
-          <tr>
-            <td colspan="3" style="padding:8px 10px; text-align:center;
-              color:var(--text-secondary); font-size:0.8rem;">
-              ... و ${criticalRows.length - 15} عنصر آخر — اذهب للمخزون لعرض الكل
-            </td>
-          </tr>`;
+      if (urgent.length > 15) {
+        tbody.innerHTML += `<tr><td colspan="3" style="padding:8px;
+          text-align:center;color:var(--text-secondary);font-size:0.8rem;">
+          ...و ${urgent.length - 15} عنصر آخر في لوحة القرارات
+        </td></tr>`;
       }
     }
 
-    // حفظ تاريخ اليوم حتى لا تظهر مجدداً
     localStorage.setItem('posdz_expiry_alert_date', todayStr);
-
-    // إظهار النافذة
     const modal = document.getElementById('expiryAlertModal');
     if (modal) modal.classList.add('open');
 
   } catch (e) {
-    // أي خطأ → نتجاهل بصمت حتى لا يعطل واجهة البيع
     console.warn('[ExpiryAlert] خطأ:', e);
   }
 }
