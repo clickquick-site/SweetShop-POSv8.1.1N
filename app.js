@@ -1492,6 +1492,253 @@ class ThemeManager {
   }
 }
 
+
+// ══════════════════════════════════════════════════════════════
+//  ExpiryRiskEngine — محرك تحليل خطر الصلاحية
+//  المعيار: يحسب الخطر الحقيقي من معدل البيع الفعلي
+//  المدخلات: productBatches + products + saleItems (من DB)
+//  المخرجات: تقرير لكل دفعة: خطر + خسارة + إجراء مقترح
+// ══════════════════════════════════════════════════════════════
+
+const EXPIRY_LEVELS = Object.freeze({
+  SAFE:     { id: 'SAFE',     sort: 4, label: '🟢 آمن',        color: '#10b981', days: null },
+  WATCH:    { id: 'WATCH',    sort: 3, label: '🟡 تنبيه',       color: '#f59e0b', days: 45  },
+  WARNING:  { id: 'WARNING',  sort: 2, label: '🟠 تحذير',       color: '#ea580c', days: 30  },
+  CRITICAL: { id: 'CRITICAL', sort: 1, label: '🔴 حرج',         color: '#ef4444', days: 15  },
+  EXPIRED:  { id: 'EXPIRED',  sort: 0, label: '⚫ منتهي',       color: '#6b7280', days: 0   },
+});
+
+class ExpiryRiskEngine {
+
+  // ── الدالة الرئيسية: تحلل كل الدفعات وترجع تقرير كامل ──────
+  static async analyze() {
+    try {
+      const db       = window.dbManager;
+      const batches  = await db.getAll('productBatches');
+      const products = await db.getAll('products');
+      const items    = await db.getAll('saleItems');
+      const sales    = await db.getAll('sales');
+
+      // خريطة saleId → date لربط saleItems بتواريخها
+      const saleDateMap = {};
+      sales.forEach(s => { saleDateMap[s.id] = s.date; });
+
+      // تاريخ الحد: آخر 30 يوم للحساب
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - 30);
+      const cutoffStr = cutoff.toISOString();
+
+      // تجميع مبيعات كل منتج في آخر 30 يوم
+      const salesMap = {};   // productId → كمية مباعة
+      items.forEach(it => {
+        const saleDate = saleDateMap[it.saleId];
+        if (!saleDate || saleDate < cutoffStr) return;
+        if (!it.productId) return;
+        salesMap[it.productId] = (salesMap[it.productId] || 0) + (it.quantity || 0);
+      });
+
+      const results = [];
+
+      // ── معالجة كل دفعة ──────────────────────────────────────
+      for (const batch of batches) {
+        if (!batch.expiryDate) continue;
+
+        const product = products.find(p => p.id === batch.productId);
+        const qty     = batch.quantity || 0;
+        if (qty <= 0 && batch.isWrittenOff) continue; // مشطوبة بالفعل
+
+        // الأيام المتبقية حتى الانتهاء
+        const daysLeft = ExpiryRiskEngine._daysLeft(batch.expiryDate);
+
+        // معدل البيع اليومي لآخر 30 يوم
+        const sold30    = salesMap[batch.productId] || 0;
+        const dailyRate = sold30 / 30;
+
+        // الكمية التي ستُباع قبل الانتهاء (بالمعدل الحالي)
+        const willSell   = daysLeft > 0 ? Math.min(qty, dailyRate * daysLeft) : 0;
+
+        // الكمية المهددة بالرمي
+        const atRiskQty  = Math.max(0, qty - willSell);
+
+        // الخسارة المالية المتوقعة
+        const buyPrice   = product?.buyPrice || 0;
+        const lossAmount = atRiskQty * buyPrice;
+
+        // نسبة الخصم المقترحة لاسترداد التكلفة
+        // المنطق: نبيع atRiskQty بأي سعر > 0 لتقليل الخسارة
+        const sellPrice     = product?.sellPrice || 0;
+        const suggestedDisc = ExpiryRiskEngine._calcDiscount(
+          sellPrice, buyPrice, atRiskQty, dailyRate, daysLeft
+        );
+
+        // مستوى الخطر
+        const level = ExpiryRiskEngine._calcLevel(daysLeft, atRiskQty, qty);
+
+        // الإجراء المقترح
+        const action = ExpiryRiskEngine._suggestAction(
+          level, suggestedDisc, atRiskQty, lossAmount
+        );
+
+        results.push({
+          batch,
+          product,
+          qty,
+          daysLeft,
+          dailyRate:      parseFloat(dailyRate.toFixed(2)),
+          willSell:       parseFloat(willSell.toFixed(1)),
+          atRiskQty:      parseFloat(atRiskQty.toFixed(1)),
+          lossAmount:     parseFloat(lossAmount.toFixed(2)),
+          suggestedDisc,
+          level,
+          action,
+        });
+      }
+
+      // ── fallback: منتجات قديمة بدون دفعة ────────────────────
+      const batchedProductIds = new Set(batches.map(b => b.productId));
+      for (const p of products) {
+        if (!p.expiryDate)              continue;
+        if (batchedProductIds.has(p.id)) continue; // لها دفعة بالفعل
+        if ((p.quantity || 0) <= 0)     continue;
+
+        const daysLeft   = ExpiryRiskEngine._daysLeft(p.expiryDate);
+        const sold30     = salesMap[p.id] || 0;
+        const dailyRate  = sold30 / 30;
+        const willSell   = daysLeft > 0 ? Math.min(p.quantity, dailyRate * daysLeft) : 0;
+        const atRiskQty  = Math.max(0, p.quantity - willSell);
+        const lossAmount = atRiskQty * (p.buyPrice || 0);
+        const suggestedDisc = ExpiryRiskEngine._calcDiscount(
+          p.sellPrice || 0, p.buyPrice || 0, atRiskQty, dailyRate, daysLeft
+        );
+        const level  = ExpiryRiskEngine._calcLevel(daysLeft, atRiskQty, p.quantity);
+        const action = ExpiryRiskEngine._suggestAction(level, suggestedDisc, atRiskQty, lossAmount);
+
+        results.push({
+          batch:     null,
+          product:   p,
+          qty:       p.quantity,
+          daysLeft,
+          dailyRate: parseFloat(dailyRate.toFixed(2)),
+          willSell:  parseFloat(willSell.toFixed(1)),
+          atRiskQty: parseFloat(atRiskQty.toFixed(1)),
+          lossAmount:parseFloat(lossAmount.toFixed(2)),
+          suggestedDisc,
+          level,
+          action,
+        });
+      }
+
+      // ترتيب: الأخطر أولاً، ثم الأعلى خسارة
+      results.sort((a, b) => {
+        if (a.level.sort !== b.level.sort) return a.level.sort - b.level.sort;
+        return b.lossAmount - a.lossAmount;
+      });
+
+      return results;
+
+    } catch (e) {
+      console.error('[ExpiryRiskEngine] خطأ في التحليل:', e);
+      return [];
+    }
+  }
+
+  // ── حساب الأيام المتبقية (سالب = منتهي) ──────────────────
+  static _daysLeft(expiryDate) {
+    const today    = new Date();
+    today.setHours(0, 0, 0, 0);
+    const expDate  = new Date(expiryDate + 'T00:00:00Z');
+    const diffMs   = expDate.getTime() - today.getTime();
+    return Math.floor(diffMs / 86400000);
+  }
+
+  // ── تحديد مستوى الخطر ─────────────────────────────────────
+  static _calcLevel(daysLeft, atRiskQty, totalQty) {
+    if (daysLeft <= 0)                          return EXPIRY_LEVELS.EXPIRED;
+    if (daysLeft <= 15)                         return EXPIRY_LEVELS.CRITICAL;
+    if (daysLeft <= 30)                         return EXPIRY_LEVELS.WARNING;
+    if (daysLeft <= 45)                         return EXPIRY_LEVELS.WATCH;
+    // > 45 يوم: آمن فقط إذا الكمية المهددة صفر أو ضئيلة
+    if (atRiskQty <= 0 || atRiskQty / (totalQty || 1) < 0.05) return EXPIRY_LEVELS.SAFE;
+    return EXPIRY_LEVELS.WATCH; // > 45 يوم لكن يوجد كمية مهددة
+  }
+
+  // ── حساب نسبة الخصم المقترحة ──────────────────────────────
+  // الهدف: تخفيض يجعل المنتج يُباع بالكامل قبل الانتهاء
+  static _calcDiscount(sellPrice, buyPrice, atRiskQty, dailyRate, daysLeft) {
+    if (atRiskQty <= 0 || daysLeft <= 0 || sellPrice <= 0) return 0;
+
+    // إذا كان البيع الحالي يكفي → لا خصم
+    if (dailyRate * daysLeft >= atRiskQty) return 0;
+
+    // نسبة خصم تدريجية بناءً على مستوى الخطر
+    if (daysLeft <= 15) return Math.min(40, Math.round((1 - buyPrice / sellPrice) * 100 * 0.9));
+    if (daysLeft <= 30) return 20;
+    if (daysLeft <= 45) return 10;
+    return 5;
+  }
+
+  // ── اقتراح الإجراء ────────────────────────────────────────
+  static _suggestAction(level, discPct, atRiskQty, lossAmount) {
+    const fmt = window.currencyFormatter?.format || (n => n + ' DA');
+    switch (level.id) {
+      case 'SAFE':
+        return { type: 'none', label: 'لا إجراء', detail: '' };
+      case 'WATCH':
+        return { type: 'promote', label: 'ابدأ الترويج',
+          detail: `${atRiskQty.toFixed(0)} وحدة معرضة للخطر` };
+      case 'WARNING':
+        return { type: 'discount', label: `خصم ${discPct}% مقترح`,
+          detail: `يُنقذ ما يصل إلى ${fmt(lossAmount)}` };
+      case 'CRITICAL':
+        return { type: 'urgent', label: 'خصم فوري أو إرجاع',
+          detail: `خسارة متوقعة: ${fmt(lossAmount)}` };
+      case 'EXPIRED':
+        return { type: 'writeoff', label: 'شطب إلزامي',
+          detail: `خسارة محققة: ${fmt(lossAmount)}` };
+      default:
+        return { type: 'none', label: '', detail: '' };
+    }
+  }
+
+  // ── ملخص سريع للوحة القرارات ──────────────────────────────
+  static summarize(results) {
+    return {
+      expired:      results.filter(r => r.level.id === 'EXPIRED'),
+      critical:     results.filter(r => r.level.id === 'CRITICAL'),
+      warning:      results.filter(r => r.level.id === 'WARNING'),
+      watch:        results.filter(r => r.level.id === 'WATCH'),
+      totalLoss:    results.reduce((s, r) => s + r.lossAmount, 0),
+      expiredLoss:  results.filter(r => r.level.id === 'EXPIRED')
+                           .reduce((s, r) => s + r.lossAmount, 0),
+    };
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  recordExpiryLoss — تسجيل خسارة الصلاحية في expenses
+//  تُستدعى من inventory.html عند الشطب
+// ══════════════════════════════════════════════════════════════
+async function recordExpiryLoss({ productName, batchId, qty, buyPrice, note }) {
+  try {
+    const amount = parseFloat(qty) * parseFloat(buyPrice || 0);
+    if (amount <= 0) return;
+    await window.dbManager.add('expenses', {
+      category:           'خسارة صلاحية',
+      amount,
+      date:               window.dateUtils.today(),
+      note:               note || `${productName} — ${qty} وحدة`,
+      isPaid:             true,
+      paidDate:           window.dateUtils.today(),
+      include_in_reports: true,
+      source:             'expiry_loss',
+      batchId:            batchId || null,
+      updatedAt:          window.dateUtils.now(),
+    });
+  } catch (e) {
+    console.error('[recordExpiryLoss] خطأ:', e);
+  }
+}
+
 // ══════════════════════════════════════════════════════════════
 //  تصدير الكلاسات العامة
 // ══════════════════════════════════════════════════════════════
@@ -2016,6 +2263,9 @@ window.APP_VERSION          = APP_VERSION;
 window.getNextInvoiceNumber = getNextInvoiceNumber;
 window.resetDailyCounter    = resetDailyCounter;
 window.dbGetByRange         = dbGetByRange;
+window.ExpiryRiskEngine     = ExpiryRiskEngine;
+window.EXPIRY_LEVELS        = EXPIRY_LEVELS;
+window.recordExpiryLoss     = recordExpiryLoss;
 
 // حوار الإدخال النصي العام (fallback إذا لم يُحمَّل print.js)
 if (typeof window._inputDialog === 'undefined') {
